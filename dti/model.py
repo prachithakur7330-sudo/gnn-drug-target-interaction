@@ -38,9 +38,12 @@ class ProteinEncoder(nn.Module):
     def __init__(self, vocab=len(AMINO_ACIDS) + 1, embed_dim=128, out_dim=128, n_filters=32):
         super().__init__()
         self.embed = nn.Embedding(vocab, embed_dim, padding_idx=0)
+        # MaxPool after the first two blocks: a kinase motif is short relative to a
+        # 1000-residue sequence, so downsampling keeps the signal and makes the later
+        # (wider) convolutions roughly 9x cheaper.
         self.conv = nn.Sequential(
-            nn.Conv1d(embed_dim, n_filters, kernel_size=8), nn.ReLU(),
-            nn.Conv1d(n_filters, n_filters * 2, kernel_size=8), nn.ReLU(),
+            nn.Conv1d(embed_dim, n_filters, kernel_size=8), nn.ReLU(), nn.MaxPool1d(3),
+            nn.Conv1d(n_filters, n_filters * 2, kernel_size=8), nn.ReLU(), nn.MaxPool1d(3),
             nn.Conv1d(n_filters * 2, n_filters * 3, kernel_size=8), nn.ReLU(),
         )
         self.head = nn.Linear(n_filters * 3, out_dim)

@@ -58,6 +58,9 @@ def main():
     parser.add_argument("--patience", type=int, default=15)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--out", default="results")
+    parser.add_argument("--max-seconds", type=float, default=None,
+                        help="stop early and checkpoint; re-run with --resume to carry on")
+    parser.add_argument("--resume", action="store_true")
     args = parser.parse_args()
 
     torch.manual_seed(args.seed)
@@ -88,13 +91,34 @@ def main():
     print(f"device={device}  params={n_params:,}  train={len(train_set)}  "
           f"val={len(val_set)}  test={len(test_set)}")
 
+    out = Path(args.out)
+    out.mkdir(exist_ok=True)
+    ckpt_path = out / "checkpoint.pt"
+
     history = []
     best_val = float("inf")
     best_state = None
     bad_epochs = 0
-    start = time.time()
+    start_epoch = 1
+    prior_seconds = 0.0
 
-    for epoch in range(1, args.epochs + 1):
+    if args.resume and ckpt_path.exists():
+        ckpt = torch.load(ckpt_path, map_location=device, weights_only=False)
+        model.load_state_dict(ckpt["model"])
+        optimiser.load_state_dict(ckpt["optimiser"])
+        scheduler.load_state_dict(ckpt["scheduler"])
+        history = ckpt["history"]
+        best_val = ckpt["best_val"]
+        best_state = ckpt["best_state"]
+        bad_epochs = ckpt["bad_epochs"]
+        start_epoch = ckpt["epoch"] + 1
+        prior_seconds = ckpt["seconds"]
+        print(f"resumed from epoch {ckpt['epoch']} (best val {best_val:.4f})")
+
+    start = time.time()
+    stopped_early = False
+
+    for epoch in range(start_epoch, args.epochs + 1):
         train_loss = run_epoch(model, train_loader, proteins, optimiser, device)
         yv, pv = predict(model, val_loader, proteins, device)
         val_mse = float(np.mean((yv - pv) ** 2))
@@ -105,25 +129,34 @@ def main():
             best_val, best_state, bad_epochs = val_mse, {k: v.cpu().clone() for k, v in model.state_dict().items()}, 0
         else:
             bad_epochs += 1
-        if epoch % 10 == 0 or epoch == 1:
-            print(f"epoch {epoch:3d}  train {train_loss:.4f}  val {val_mse:.4f}  best {best_val:.4f}")
+        print(f"epoch {epoch:3d}  train {train_loss:.4f}  val {val_mse:.4f}  best {best_val:.4f}",
+              flush=True)
+
+        torch.save({"model": model.state_dict(), "optimiser": optimiser.state_dict(),
+                    "scheduler": scheduler.state_dict(), "history": history,
+                    "best_val": best_val, "best_state": best_state, "bad_epochs": bad_epochs,
+                    "epoch": epoch, "seconds": prior_seconds + time.time() - start}, ckpt_path)
+
         if bad_epochs >= args.patience:
             print(f"early stop at epoch {epoch} (no val improvement for {args.patience})")
+            break
+        if args.max_seconds and time.time() - start > args.max_seconds:
+            print(f"time budget reached at epoch {epoch}; re-run with --resume to continue")
+            stopped_early = True
             break
 
     model.load_state_dict(best_state)
     yt, pt = predict(model, test_loader, proteins, device)
     metrics = all_metrics(yt, pt)
-    elapsed = round(time.time() - start, 1)
+    elapsed = round(prior_seconds + time.time() - start, 1)
     print("test metrics:", json.dumps(metrics))
 
-    out = Path(args.out)
-    out.mkdir(exist_ok=True)
     result = {
         "dataset": "DAVIS",
         "split": "DeepDTA fold setting 1",
         "n_params": n_params,
         "epochs_run": len(history),
+        "completed": not stopped_early,
         "best_val_mse": round(best_val, 4),
         "train_seconds": elapsed,
         "test": metrics,
