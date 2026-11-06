@@ -1,0 +1,18 @@
+{
+  "dataset": "DAVIS",
+  "split": "DeepDTA fold setting 1",
+  "n_params": 480705,
+  "epochs_run": 100,
+  "completed": true,
+  "best_val_mse": 0.2465,
+  "train_seconds": 6249.2,
+  "test": {
+    "mse": 0.2973,
+    "rmse": 0.5452,
+    "pearson": 0.7933,
+    "ci": 0.8692,
+    "r2": 0.6291,
+    "rm2": 0.6228
+  },
+  "test_predictions_file": "test_predictions.npz"
+}
